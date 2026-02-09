@@ -1,0 +1,56 @@
+#include "IMUTest.h"
+
+Adafruit_LSM9DS1 lsm = Adafruit_LSM9DS1();
+
+void IMUTest::setIMUTest() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  // Define I2C on PB6/PB7
+  Wire.setSCL(PB6);
+  Wire.setSDA(PB7);
+  Wire.begin();
+
+  delay(2000); 
+  Serial.println("\n--- Starting LSM9DS1 Test ---");
+
+  // Try to initialize
+  if (!lsm.begin()) {
+    Serial.println("CRITICAL: LSM9DS1 not found at PB6/PB7!");
+    Serial.println("Check: 1. SCL is PB6, SDA is PB7. 2. Sensor has 3.3V.");
+  } else {
+    Serial.println("SUCCESS: Sensor Connected!");
+  }
+}
+
+void IMUTest::runIMUTest() {
+  // Faster blink to show active reading
+  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+
+  lsm.read();
+  sensors_event_t a, m, g, temp;
+  lsm.getEvent(&a, &m, &g, &temp);
+
+  // Serial.print("ACCEL [m/s^2]: ");
+  // Serial.print("X: "); Serial.print(a.acceleration.x);
+  // Serial.print(" Y: "); Serial.print(a.acceleration.y);
+  // Serial.print(" Z: "); Serial.println(a.acceleration.z);
+
+  // Optional: Add Gyroscope (rotation speed)
+  
+  // Serial.print("GYRO [rad/s]: ");
+  // Serial.print("X: "); Serial.print(g.gyro.x);
+  // Serial.print(" Y: "); Serial.print(g.gyro.y);
+  // Serial.print(" Z: "); Serial.println(g.gyro.z);
+  float accelX = a.acceleration.x;
+  float accelY = a.acceleration.y;
+  float accelZ = a.acceleration.z;
+  float pitch = atan2(accelY, accelZ) * 180.0 / PI;
+  float roll  = atan2(-accelX, sqrt(sq(accelY) + sq(accelZ))) * 180.0 / PI;
+  
+  Serial.print("Pitch: "); Serial.print(pitch);
+  Serial.print(" Roll: "); Serial.println(roll);
+
+  Serial.println("------------------------------------");
+  delay(400); // Faster update (5 times per second)
+}
