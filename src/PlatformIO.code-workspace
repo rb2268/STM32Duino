@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"name": "EE14HW3",
+			"path": "../../EE14HW3"
+		},
+		{
+			"name": "EE14Lab4",
+			"path": "../../EE14Lab4"
+		},
+		{
+			"name": "EE14Lab5",
+			"path": "../../EE14Lab5"
+		}
+	],
+	"settings": {}
+}

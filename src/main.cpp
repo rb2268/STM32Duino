@@ -10,6 +10,14 @@ const int SERVO_10_PIN = D9;
 //Default angle is set to 90 so it can be adjusted in the positive and negative directions
 const int angle = 90;
 
+//For the PID constants
+const float kp = 0.6; 
+const float ki = .9;
+const float kd = .5;
+const float tau = 0.2
+float previous, derivative = 0; //Previous error
+float limMinI, limHighI; //For integrator clamping
+
 Servo servo30;
 Servo servo10;
 
@@ -20,6 +28,7 @@ void positionServos(int xServo, int yServo, int delay);
 float calcRoll(float accelX, float accelY, float accelZ);
 float calcPitch(float accelX, float accelY, float accelZ);
 float calcAngVel(char axis, sensors_event_t &g);
+void calcOrientation(float wx, float wy, float wz);
 
 void setup() {
   Serial.begin(115200);
@@ -48,6 +57,8 @@ void loop() {
   positionServos(30, -8, 300);
   // Down Right
   positionServos(-30, -8, 300);
+
+  lsm.read();
 }
 
 
@@ -87,6 +98,12 @@ void positionServos(int xServo, int yServo, int pauseTime) {
 }
 
 /*
+ * 
+ * Sets the IMU data to the two peripheral pins using I2C (SDA and SCL)
+ * Will notify user in the Serial Monitor if pins aren't connected or the IMU isn't working
+ * Operates at a Baud Rate of 115200
+ * 
+ * Used in the setup() function in main.cpp
 
 */
 void setIMUTest() {
@@ -110,14 +127,18 @@ void setIMUTest() {
   }
 }
 
+//Accepts floating point integer data from the IMU to output roll
 float calcRoll(float accelX, float accelY, float accelZ) {
   return atan2(-accelX, sqrt(sq(accelY) + sq(accelZ))) * 180.0 / PI;
 }
 
+//Accepts floating point integer data from the IMU to output pitch
 float calcPitch(float accelX, float accelY, float accelZ) {
   return atan2(accelY, accelZ) * 180.0 / PI;
 }
 
+//Outputs angular velocity data
+//The axis input variable must be either 'x' 'y' or 'z' for these three coordinate axes
 float calcAngVel(char axis, sensors_event_t &g) {
   if(axis == 'x' or axis == 'X') {
     return (g.gyro.x);
@@ -130,3 +151,53 @@ float calcAngVel(char axis, sensors_event_t &g) {
   }
   return -1.0;
 }
+
+//Convert to Quarternions to prevent Euler gimbal lock, then make the PID loop. Credit: https://www.nmas.org/wp-content/uploads/2023/03/2022_NMJS_Kim.pdf
+//Inputs from the IMU
+void calcOrientation(float wx, float wy, float wz) { //Deadline: Saturday 2/14 Night
+  float w[4] = {0.0, wx, wy, wz};
+  float q[4] = {1.0, 0.0, 0.0, 0.0};
+  
+  //Make the Hamilton Operator Calculations
+
+  //Derivative and Integral Calculations
+
+  //Normalize the Quarternion
+
+  //Convert to Euler Angles
+    
+  //Account for Roll
+
+  //Find the acceleration values to determine the PID gain (still a little confused on)
+}
+
+//Do this first
+//Calculate the PID equation that gives the necessary angle for stabilization
+void PID(float imuAngle, float last_time) {
+  float time = millis();
+  float dt = (time - last_time)/1000.0;
+
+  float actual = imuAngle;
+  float error = angle - actual; //Float angle is the setpoint angle
+  //Make PID Calculations here
+  calcPID(error, dt);
+
+}
+
+//Helper method that calculates the actual PID output necessary to stabilize
+float calcPID(float error, float dt) {
+  //Calcuklate Proportional Term
+  float proportional = error*kp;
+  //Calculate Integral term
+  integral += 0.5*ki*error*dt * (error + previous);
+  //Clamp the integrator term to prevent overshoot
+
+  //Calculate derivative
+  derivative = (2.0*kd*(error - previous)) 
+                    + (2.0*tau - dt * derivative) 
+                    / (2.0*tau + dt);
+
+  previous = error;
+  return (proportional + integral + derivative);
+}
+
