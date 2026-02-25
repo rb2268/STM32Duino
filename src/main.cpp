@@ -11,12 +11,22 @@ const int SERVO_10_PIN = D9;
 const int angle = 90;
 
 //For the PID constants
-const float kp = 0.6; 
-const float ki = .9;
-const float kd = .5;
-const float tau = 0.2
-float previous, derivative = 0; //Previous error
-float limMinI, limHighI; //For integrator clamping
+const float setpointAngle = 0.0;
+struct PID {
+  float kp, ki, kd, tau;
+  float integral;
+  float prevError;
+  float derivative;
+  unsigned long lastTime;
+};
+//Also for PID
+float pitchOffset, rollOffset, pitchZero = 0, rollZero = 0;
+float pitchFilt = 0.0f, rollFilt  = 0.0f;
+unsigned long lastIMUTime = 0;
+
+//Sets the kp, ki, kd, tau, ... in a more 'struct'ured way, get it!
+PID pitchPID = {1.7, 0.05, 0.10, 0.3, 0, 0, 0, 0};
+PID rollPID  = {1.2, 0.05, 0.10, 0.3, 0, 0, 0, 0};
 
 Servo servo30;
 Servo servo10;
@@ -29,6 +39,9 @@ float calcRoll(float accelX, float accelY, float accelZ);
 float calcPitch(float accelX, float accelY, float accelZ);
 float calcAngVel(char axis, sensors_event_t &g);
 void calcOrientation(float wx, float wy, float wz);
+// float outputPID(float imuAngle, float limMaxI);
+// float calcPID(float error, float dt, float limMaxI);
+float updatePID(PID &pid, float measurement, float setpoint, float limMaxI);
 
 void setup() {
   Serial.begin(115200);
@@ -43,22 +56,75 @@ void setup() {
   servo10.write(angle);
 
   setIMUTest();
-  
-  delay(1000); 
+
+  delay(500);
+
+  float pSum = 0, rSum = 0;
+  for (int i = 0; i < 100; i++) {
+    lsm.read();
+    sensors_event_t a, m, g, temp;
+    lsm.getEvent(&a, &m, &g, &temp);
+
+    pSum += calcPitch(a.acceleration.x, a.acceleration.y, a.acceleration.z);
+    rSum += calcRoll (a.acceleration.x, a.acceleration.y, a.acceleration.z);
+    delay(5);
+  }
+
+  pitchZero = pSum / 100.0f;
+  rollZero  = rSum / 100.0f;
+
+  Serial.print("Pitch zero: "); Serial.println(pitchZero);
+  Serial.print("Roll zero: ");  Serial.println(rollZero);
   Serial.println("Setup Complete. Starting movement loop...");
 }
 
 void loop() {
-  // Up Left
-  positionServos(30, 8, 300);
-  // Left Down
-  positionServos(-30, 8, 300);
-  // uP riGHT
-  positionServos(30, -8, 300);
-  // Down Right
-  positionServos(-30, -8, 300);
-
+  // Updates all the sensors
   lsm.read();
+  sensors_event_t a, m, g, temp;
+  lsm.getEvent(&a, &m, &g, &temp);
+
+  unsigned long now = millis();
+  float dt = (now - lastIMUTime) / 1000.0f;
+  lastIMUTime = now;
+
+  //X-axis goes to pitch, Y-axis goes to roll
+  float pitch = calcPitch(a.acceleration.x, a.acceleration.y, a.acceleration.z);
+  float roll = calcRoll(a.acceleration.x, a.acceleration.y, a.acceleration.z);
+
+  // Gyro rates (rad/s -> deg/s if needed)
+  float gyroX = g.gyro.x * 180.0f / PI;
+  float gyroY = g.gyro.y * 180.0f / PI;
+
+  // Constant for filtering
+  const float alpha = 0.98f;
+
+  //Filters pitcha and roll (found online)
+  pitchFilt = alpha * (pitchFilt + gyroX * dt) + (1.0f - alpha) * pitch;
+  rollFilt  = alpha * (rollFilt  + gyroY * dt) + (1.0f - alpha) * roll;
+
+  //Incase you want an offset value (not used)
+  pitch -= pitchZero;
+  roll  -= rollZero;
+  //For pitch and roll axes
+  pitch = 0.98f * (pitch + gyroX * dt) + 0.02f * pitch;
+  roll  = 0.98f * (roll  + gyroY * dt) + 0.02f * roll;
+
+  Serial.print("Pitch: "); Serial.print(pitch); 
+  Serial.print(" Roll: "); Serial.println(roll);
+
+  float pitchCorrection = updatePID(pitchPID, pitch, setpointAngle, 30);
+  float rollCorrection  = updatePID(rollPID,  roll,  setpointAngle, 10);
+
+  Serial.print("Pitch correction: "); Serial.println(pitchCorrection); 
+  Serial.print("Roll Correction   "); Serial.println(rollCorrection); 
+  positionServos(round(pitchCorrection), round(rollCorrection), 0);
+  delay(8);  // control loop at ~100Hz
+  // positionServos(0, 0, 100);
+  Serial.print("ax: "); Serial.print(a.acceleration.x);
+  Serial.print(" ay: "); Serial.print(a.acceleration.y);
+  Serial.print(" az: "); Serial.println(a.acceleration.z);
+  
 }
 
 
@@ -80,19 +146,12 @@ void positionServos(int xServo, int yServo, int pauseTime) {
   servo30.write(angle + xServo);
   servo10.write(angle + yServo);
 
-
   lsm.read();
   sensors_event_t a, m, g, temp;
   lsm.getEvent(&a, &m, &g, &temp);
   float x_rot_vel = calcAngVel( 'x', g);
   float y_rot_vel = calcAngVel( 'y', g);
   float z_rot_vel = calcAngVel( 'z', g);
-
-  float pitch = calcPitch(a.acceleration.x, a.acceleration.y, a.acceleration.z);
-  float roll = calcRoll(a.acceleration.x, a.acceleration.y, a.acceleration.z);
-
-  Serial.print("Pitch: "); Serial.print(pitch);
-  Serial.print(" Roll: "); Serial.println(roll);
 
   delay(pauseTime);
 }
@@ -127,14 +186,13 @@ void setIMUTest() {
   }
 }
 
-//Accepts floating point integer data from the IMU to output roll
-float calcRoll(float accelX, float accelY, float accelZ) {
-  return atan2(-accelX, sqrt(sq(accelY) + sq(accelZ))) * 180.0 / PI;
+//From IMU, outputs pitch and roll
+float calcPitch(float ax, float ay, float az) {
+  return atan2(-ax, sqrt(ay*ay + az*az)) * 180.0 / PI;
 }
 
-//Accepts floating point integer data from the IMU to output pitch
-float calcPitch(float accelX, float accelY, float accelZ) {
-  return atan2(accelY, accelZ) * 180.0 / PI;
+float calcRoll(float ax, float ay, float az) {
+  return atan2(ay, az) * 180.0 / PI;
 }
 
 //Outputs angular velocity data
@@ -171,33 +229,78 @@ void calcOrientation(float wx, float wy, float wz) { //Deadline: Saturday 2/14 N
   //Find the acceleration values to determine the PID gain (still a little confused on)
 }
 
+float updatePID(PID &pid, float measurement, float setpoint, float limMaxI) {
+  unsigned long now = millis();
+  float dt = (now - pid.lastTime) / 1000.0f;
+  pid.lastTime = now;
+
+  if (dt <= 0.001f) return 0;
+
+  float error = setpoint - measurement;
+
+  // Proportional term
+  float P = pid.kp * error;
+
+  // I (anti-windup)
+  pid.integral += pid.ki * error * dt;
+  pid.integral = constrain(pid.integral, -limMaxI, limMaxI);
+
+  // D (filtered version to prevent noise I believe)
+  float rawD = (error - pid.prevError) / dt;
+  pid.derivative = (2.0f * pid.tau * pid.derivative + dt * rawD) /
+                   (2.0f * pid.tau + dt);
+
+  float D = pid.kd * pid.derivative;
+
+  pid.prevError = error;
+
+  float output = P + pid.integral + D;
+  return constrain(output, -limMaxI, limMaxI);
+}
+
 //Do this first
 //Calculate the PID equation that gives the necessary angle for stabilization
-void PID(float imuAngle, float last_time) {
-  float time = millis();
-  float dt = (time - last_time)/1000.0;
+// float outputPID(float imuAngle, float limMaxI) {
+//   float time = millis();
+//   float dt = (time - lastTime) / 1000.0f;
+//   lastTime = time;
 
-  float actual = imuAngle;
-  float error = angle - actual; //Float angle is the setpoint angle
-  //Make PID Calculations here
-  calcPID(error, dt);
+//   if (dt <= 0) return 0;
 
-}
+//   float error = setpointAngle - imuAngle;
+//   return calcPID(error, dt, limMaxI);
+// }
 
-//Helper method that calculates the actual PID output necessary to stabilize
-float calcPID(float error, float dt) {
-  //Calcuklate Proportional Term
-  float proportional = error*kp;
-  //Calculate Integral term
-  integral += 0.5*ki*error*dt * (error + previous);
-  //Clamp the integrator term to prevent overshoot
+// //Helper method that calculates the actual PID output necessary to stabilize
+// float calcPID(float error, float dt, float limMaxI) {
+//   float proportional = kp * error;
 
-  //Calculate derivative
-  derivative = (2.0*kd*(error - previous)) 
-                    + (2.0*tau - dt * derivative) 
-                    / (2.0*tau + dt);
+//   if(fabs(error) > 0.2f) {
+//     integral += 0.5f * ki * dt * (error + previous);
+//   }
 
-  previous = error;
-  return (proportional + integral + derivative);
-}
+//   integral = constrain(integral, -limMaxI, limMaxI);
 
+//   float rawDerivative = (error - previous) / dt;
+
+//   float filteredDerivative =
+//       (2.0f * tau * derivative + dt * rawDerivative) /
+//       (2.0f * tau + dt);
+
+//   derivative = kd * filteredDerivative;
+
+//   previous = error;
+
+//   float output = proportional + integral + derivative;
+//   output = constrain(output, -limMaxI, limMaxI);
+
+//   Serial.print("error: ");
+// Serial.print(error, 4);
+// Serial.print("  P: ");
+// Serial.print(proportional, 4);
+// Serial.print("  D: ");
+// Serial.print(derivative, 4);
+// Serial.print("  I: ");
+// Serial.println(integral, 4);
+//   return output;
+// }
